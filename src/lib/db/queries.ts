@@ -30,6 +30,16 @@ export async function accountExists(opts: { email?: string; phone?: string }): P
   return data === true;
 }
 
+/**
+ * Permanently deletes the signed-in user's account and all of their data.
+ * Irreversible. Backed by a security-definer RPC that erases the auth user
+ * (everything else cascades).
+ */
+export async function deleteAccount(): Promise<void> {
+  const { error } = await supabase.rpc('delete_account');
+  if (error) throw error;
+}
+
 // ============================================================
 // Profile
 // ============================================================

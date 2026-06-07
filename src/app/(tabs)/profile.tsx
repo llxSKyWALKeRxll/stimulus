@@ -4,7 +4,7 @@ import { Alert, Pressable, StyleSheet, View } from 'react-native';
 import { Button, Card, Icon, Logo, Screen, SectionLabel, Segmented, Text } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/theme';
 import { useAuth } from '@/lib/auth-context';
-import { listBodyWeights, updateProfile } from '@/lib/db/queries';
+import { deleteAccount, listBodyWeights, updateProfile } from '@/lib/db/queries';
 import type { Gender, Units } from '@/lib/db/types';
 import { useTheme } from '@/lib/theme';
 import { formatWeight } from '@/lib/units';
@@ -21,6 +21,7 @@ export default function ProfileScreen() {
   const router = useRouter();
   const { session, profile, refreshProfile, signOut } = useAuth();
   const [latestWeight, setLatestWeight] = useState<number | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -48,6 +49,32 @@ export default function ProfileScreen() {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Sign out', style: 'destructive', onPress: () => signOut() },
     ]);
+
+  const confirmDelete = () =>
+    Alert.alert(
+      'Delete account?',
+      'This permanently deletes your account and all your workouts, exercises, and body-weight history. This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            setDeleting(true);
+            try {
+              await deleteAccount();
+              await signOut();
+            } catch (e) {
+              setDeleting(false);
+              Alert.alert(
+                'Could not delete account',
+                e instanceof Error ? e.message : 'Please try again.',
+              );
+            }
+          },
+        },
+      ],
+    );
 
   const account = session?.user?.email ?? session?.user?.phone ?? '—';
   const name = profile?.display_name?.trim() || 'Lifter';
@@ -141,6 +168,15 @@ export default function ProfileScreen() {
           icon={<Icon name="log-out-outline" size={18} color={c.text} />}
           onPress={confirmSignOut}
         />
+        <Pressable
+          onPress={confirmDelete}
+          disabled={deleting}
+          hitSlop={8}
+          style={{ marginTop: Spacing.four, alignItems: 'center', paddingVertical: Spacing.three }}>
+          <Text variant="bodySmall" tone="danger" weight="semibold">
+            {deleting ? 'Deleting…' : 'Delete account'}
+          </Text>
+        </Pressable>
       </View>
 
       <Text variant="caption" tone="tertiary" align="center" style={{ marginTop: Spacing.six }}>
