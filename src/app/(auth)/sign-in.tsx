@@ -9,6 +9,10 @@ import { supabase } from '@/lib/supabase';
 type Channel = 'email' | 'phone';
 type Mode = 'login' | 'register';
 
+// Phone/SMS OTP is off for v1 (no SMS provider yet). Flip to true once Twilio
+// (and, for India, DLT) is configured in the Supabase dashboard.
+const ENABLE_PHONE_OTP = false;
+
 export default function SignIn() {
   const router = useRouter();
   const params = useLocalSearchParams<{ mode?: Mode }>();
@@ -93,35 +97,41 @@ export default function SignIn() {
           <View style={{ gap: Spacing.three, marginTop: Spacing.four }}>
             <Text variant="title">{mode === 'register' ? 'Create your account' : 'Welcome back'}</Text>
             <Text variant="body" tone="secondary">
-              {mode === 'register'
-                ? "Enter your email or phone — we'll send a 6-digit code to verify it."
-                : "Enter your email or phone — we'll send a 6-digit code to sign you in."}
+              {ENABLE_PHONE_OTP
+                ? mode === 'register'
+                  ? "Enter your email or phone — we'll send a 6-digit code to verify it."
+                  : "Enter your email or phone — we'll send a 6-digit code to sign you in."
+                : mode === 'register'
+                ? "Enter your email — we'll send a 6-digit code to verify it."
+                : "Enter your email — we'll send a 6-digit code to sign you in."}
             </Text>
           </View>
 
           <View style={{ marginTop: Spacing.six }}>
-            <View style={styles.tabs}>
-              <Pill
-                label="Email"
-                selected={channel === 'email'}
-                onPress={() => {
-                  setChannel('email');
-                  setValue('');
-                  setError(null);
-                }}
-              />
-              <Pill
-                label="Phone"
-                selected={channel === 'phone'}
-                onPress={() => {
-                  setChannel('phone');
-                  setValue('');
-                  setError(null);
-                }}
-              />
-            </View>
+            {ENABLE_PHONE_OTP ? (
+              <View style={styles.tabs}>
+                <Pill
+                  label="Email"
+                  selected={channel === 'email'}
+                  onPress={() => {
+                    setChannel('email');
+                    setValue('');
+                    setError(null);
+                  }}
+                />
+                <Pill
+                  label="Phone"
+                  selected={channel === 'phone'}
+                  onPress={() => {
+                    setChannel('phone');
+                    setValue('');
+                    setError(null);
+                  }}
+                />
+              </View>
+            ) : null}
 
-            <View style={{ marginTop: Spacing.four }}>
+            <View style={{ marginTop: ENABLE_PHONE_OTP ? Spacing.four : 0 }}>
               {channel === 'email' ? (
                 <Input
                   label="Email"
