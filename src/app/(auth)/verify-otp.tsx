@@ -5,7 +5,7 @@ import { Button, OtpInput, Screen, Text } from '@/components/ui';
 import { Spacing } from '@/constants/theme';
 import { supabase } from '@/lib/supabase';
 
-const RESEND_SECONDS = 30;
+const RESEND_SECONDS = 60;
 
 export default function VerifyOtp() {
   const router = useRouter();
