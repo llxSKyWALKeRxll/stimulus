@@ -14,6 +14,23 @@ import type {
 } from './types';
 
 // ============================================================
+// Auth
+// ============================================================
+
+/**
+ * Whether an account already exists for the given email or phone. Used by the
+ * register flow to warn the user before we send a code. Returns only a boolean.
+ */
+export async function accountExists(opts: { email?: string; phone?: string }): Promise<boolean> {
+  const { data, error } = await supabase.rpc('account_exists', {
+    p_email: opts.email ?? null,
+    p_phone: opts.phone ?? null,
+  });
+  if (error) throw error;
+  return data === true;
+}
+
+// ============================================================
 // Profile
 // ============================================================
 
@@ -29,7 +46,9 @@ export async function getProfile(): Promise<Profile | null> {
   return data ?? null;
 }
 
-export async function updateProfile(patch: Partial<Pick<Profile, 'display_name' | 'units'>>) {
+export async function updateProfile(
+  patch: Partial<Pick<Profile, 'display_name' | 'units' | 'age' | 'gender' | 'height_cm'>>,
+) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error('Not signed in');
   const { data, error } = await supabase
@@ -382,6 +401,27 @@ export async function addSet(input: {
 
 export async function deleteSet(id: string) {
   const { error } = await supabase.from('sets').delete().eq('id', id);
+  if (error) throw error;
+}
+
+/** Replaces all drops on a set — used when editing a logged set's weights/reps. */
+export async function updateSetDrops(setId: string, drops: DropInput[]) {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Not signed in');
+
+  const { error: delErr } = await supabase.from('set_drops').delete().eq('set_id', setId);
+  if (delErr) throw delErr;
+
+  const dropRows = drops.map((d, i) => ({
+    set_id: setId,
+    user_id: user.id,
+    order_index: i,
+    weight_kg: d.weight_kg,
+    reps: d.reps,
+    is_bodyweight: d.is_bodyweight ?? false,
+    is_failure: d.is_failure ?? false,
+  }));
+  const { error } = await supabase.from('set_drops').insert(dropRows);
   if (error) throw error;
 }
 

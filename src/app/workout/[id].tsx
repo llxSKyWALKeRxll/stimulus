@@ -1,10 +1,11 @@
+import { differenceInCalendarDays } from 'date-fns';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { ExercisePicker } from '@/components/exercise-picker';
 import { SetEditor } from '@/components/set-editor';
 import { WorkoutNameField } from '@/components/workout-name-field';
-import { Button, Card, EmptyState, Icon, Pill, Screen, Text } from '@/components/ui';
+import { Button, Card, EmptyState, Icon, Pill, Screen, Snackbar, Text } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/theme';
 import {
   addExerciseToSession,
@@ -14,6 +15,8 @@ import {
   getProfile,
   getSession,
   removeExerciseEntry,
+  updateSetDrops,
+  type DropInput,
 } from '@/lib/db/queries';
 import type {
   ExerciseEntryWithSets,
@@ -26,6 +29,23 @@ import { formatSessionDate } from '@/lib/format';
 import { useTheme } from '@/lib/theme';
 import { dropVolumeKg, epley1RM, formatWeight } from '@/lib/units';
 
+const EDIT_WINDOW_DAYS = 7;
+
+/** Workouts are editable for a week after they're performed. */
+function withinEditWindow(performedAt: string): boolean {
+  return differenceInCalendarDays(new Date(), new Date(performedAt)) <= EDIT_WINDOW_DAYS;
+}
+
+type EditTarget =
+  | { mode: 'add'; entryId: string; nextIndex: number; kind: ExerciseKind }
+  | {
+      mode: 'edit';
+      entryId: string;
+      setId: string;
+      kind: ExerciseKind;
+      initialDrops: DropInput[];
+    };
+
 export default function WorkoutDetail() {
   const router = useRouter();
   const { c } = useTheme();
@@ -34,7 +54,15 @@ export default function WorkoutDetail() {
   const [units, setUnits] = useState<Units>('kg');
   const [loading, setLoading] = useState(true);
   const [picking, setPicking] = useState(false);
-  const [editing, setEditing] = useState<{ entryId: string; nextIndex: number; kind: ExerciseKind } | null>(null);
+  const [editing, setEditing] = useState<EditTarget | null>(null);
+
+  // Undo: deletions are applied optimistically, then committed after a delay
+  // unless the user taps Undo. The parent owns the timer; one pending at a time.
+  const pendingRef = useRef<{ commit: () => Promise<void>; timer: ReturnType<typeof setTimeout> } | null>(null);
+  const snapshotRef = useRef<SessionWithEntries | null>(null);
+  const [undoMsg, setUndoMsg] = useState<string | null>(null);
+
+  const editable = session ? withinEditWindow(session.performed_at) : false;
 
   const reload = useCallback(async () => {
     if (!id) return;
@@ -48,8 +76,71 @@ export default function WorkoutDetail() {
     reload().catch(console.warn);
   }, [reload]);
 
+  // Commit any still-pending deletion (e.g. on leaving the screen).
+  const flushPending = useCallback(async () => {
+    const p = pendingRef.current;
+    if (!p) return;
+    clearTimeout(p.timer);
+    pendingRef.current = null;
+    snapshotRef.current = null;
+    setUndoMsg(null);
+    await p.commit().catch(console.warn);
+  }, []);
+
+  // On unmount, make any outstanding deletion permanent.
+  useEffect(
+    () => () => {
+      const p = pendingRef.current;
+      if (p) {
+        clearTimeout(p.timer);
+        void p.commit().catch(console.warn);
+      }
+    },
+    [],
+  );
+
+  const scheduleUndoableDelete = useCallback(
+    (message: string, optimistic: (s: SessionWithEntries) => SessionWithEntries, commit: () => Promise<void>) => {
+      // Any previous pending deletion commits immediately before we start a new one.
+      const prev = pendingRef.current;
+      if (prev) {
+        clearTimeout(prev.timer);
+        pendingRef.current = null;
+        void prev.commit().catch(console.warn);
+      }
+      setSession((cur) => {
+        if (!cur) return cur;
+        snapshotRef.current = cur;
+        return optimistic(cur);
+      });
+      const timer = setTimeout(() => {
+        const p = pendingRef.current;
+        if (p) {
+          pendingRef.current = null;
+          snapshotRef.current = null;
+          setUndoMsg(null);
+          void p.commit().catch(console.warn);
+        }
+      }, 5000);
+      pendingRef.current = { commit, timer };
+      setUndoMsg(message);
+    },
+    [],
+  );
+
+  const undoDelete = useCallback(() => {
+    const p = pendingRef.current;
+    if (!p) return;
+    clearTimeout(p.timer);
+    pendingRef.current = null;
+    if (snapshotRef.current) setSession(snapshotRef.current);
+    snapshotRef.current = null;
+    setUndoMsg(null);
+  }, []);
+
   const onPickExercise = async (ex: ExerciseWithTags) => {
     if (!session) return;
+    await flushPending();
     try {
       await addExerciseToSession({
         session_id: session.id,
@@ -62,10 +153,15 @@ export default function WorkoutDetail() {
     }
   };
 
-  const onSaveSet = async (drops: { weight_kg: number; reps: number; is_bodyweight?: boolean }[]) => {
+  const onSaveSet = async (drops: DropInput[]) => {
     if (!editing) return;
+    await flushPending();
     try {
-      await addSet({ exercise_entry_id: editing.entryId, order_index: editing.nextIndex, drops });
+      if (editing.mode === 'add') {
+        await addSet({ exercise_entry_id: editing.entryId, order_index: editing.nextIndex, drops });
+      } else {
+        await updateSetDrops(editing.setId, drops);
+      }
       setEditing(null);
       await reload();
     } catch (e) {
@@ -73,23 +169,38 @@ export default function WorkoutDetail() {
     }
   };
 
-  const removeEntry = (entryId: string) =>
-    Alert.alert('Remove exercise?', 'All sets logged under it will be lost.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Remove',
-        style: 'destructive',
-        onPress: async () => {
-          await removeExerciseEntry(entryId);
-          await reload();
-        },
-      },
-    ]);
+  const editSet = (entry: ExerciseEntryWithSets, set: ExerciseEntryWithSets['sets'][number]) =>
+    setEditing({
+      mode: 'edit',
+      entryId: entry.id,
+      setId: set.id,
+      kind: entry.exercise.kind,
+      initialDrops: set.drops.map((d) => ({
+        weight_kg: d.weight_kg,
+        reps: d.reps,
+        is_bodyweight: d.is_bodyweight,
+        is_failure: d.is_failure,
+      })),
+    });
 
-  const removeSetById = async (setId: string) => {
-    await deleteSet(setId);
-    await reload();
-  };
+  const removeEntry = (entryId: string) =>
+    scheduleUndoableDelete(
+      'Exercise removed',
+      (s) => ({ ...s, entries: s.entries.filter((e) => e.id !== entryId) }),
+      () => removeExerciseEntry(entryId),
+    );
+
+  const removeSet = (entryId: string, setId: string) =>
+    scheduleUndoableDelete(
+      'Set deleted',
+      (s) => ({
+        ...s,
+        entries: s.entries.map((e) =>
+          e.id === entryId ? { ...e, sets: e.sets.filter((x) => x.id !== setId) } : e,
+        ),
+      }),
+      () => deleteSet(setId),
+    );
 
   const deleteWorkout = () =>
     Alert.alert('Delete workout?', 'This permanently removes this workout and all its sets.', [
@@ -99,6 +210,10 @@ export default function WorkoutDetail() {
         style: 'destructive',
         onPress: async () => {
           if (!id) return;
+          // Drop any pending set/exercise deletion — the whole session is going.
+          const p = pendingRef.current;
+          if (p) clearTimeout(p.timer);
+          pendingRef.current = null;
           try {
             await deleteWorkoutSession(id);
             router.back();
@@ -140,14 +255,24 @@ export default function WorkoutDetail() {
             sessionId={session.id}
             initialTitle={session.title}
             dateLabel={formatSessionDate(session.performed_at)}
+            editable={editable}
           />
         </View>
+
+        {!editable ? (
+          <View style={[styles.lockBanner, { backgroundColor: c.backgroundInteractive, borderColor: c.border }]}>
+            <Icon name="lock-closed-outline" size={15} color={c.textTertiary} />
+            <Text variant="caption" tone="secondary" style={{ flex: 1 }}>
+              Editing is locked — workouts can be changed for {EDIT_WINDOW_DAYS} days after they&apos;re logged.
+            </Text>
+          </View>
+        ) : null}
 
         {session.entries.length === 0 ? (
           <EmptyState
             icon="add-circle-outline"
             title="Empty workout"
-            subtitle="Add your first exercise to start logging sets."
+            subtitle={editable ? 'Add your first exercise to start logging sets.' : 'No exercises were logged.'}
           />
         ) : (
           <View style={{ marginTop: Spacing.five, gap: Spacing.four }}>
@@ -157,21 +282,34 @@ export default function WorkoutDetail() {
                 index={i + 1}
                 entry={entry}
                 units={units}
-                onAddSet={() => setEditing({ entryId: entry.id, nextIndex: entry.sets.length, kind: entry.exercise.kind })}
-                onRemoveSet={removeSetById}
+                editable={editable}
+                onAddSet={() => setEditing({ mode: 'add', entryId: entry.id, nextIndex: entry.sets.length, kind: entry.exercise.kind })}
+                onEditSet={(set) => editSet(entry, set)}
+                onRemoveSet={(setId) => removeSet(entry.id, setId)}
                 onRemoveEntry={() => removeEntry(entry.id)}
               />
             ))}
           </View>
         )}
 
-        <View style={{ marginTop: Spacing.five }}>
-          <Button title="Add exercise" variant="secondary" icon={<Icon name="add" size={18} color={c.text} />} onPress={() => setPicking(true)} />
-        </View>
+        {editable ? (
+          <View style={{ marginTop: Spacing.five }}>
+            <Button title="Add exercise" variant="secondary" icon={<Icon name="add" size={18} color={c.text} />} onPress={() => setPicking(true)} />
+          </View>
+        ) : null}
       </ScrollView>
 
       <ExercisePicker visible={picking} onClose={() => setPicking(false)} onPick={onPickExercise} />
-      <SetEditor visible={editing !== null} units={units} kind={editing?.kind} onClose={() => setEditing(null)} onSave={onSaveSet} />
+      <SetEditor
+        visible={editing !== null}
+        units={units}
+        kind={editing?.kind}
+        title={editing?.mode === 'edit' ? 'Edit set' : 'Log set'}
+        initialDrops={editing?.mode === 'edit' ? editing.initialDrops : undefined}
+        onClose={() => setEditing(null)}
+        onSave={onSaveSet}
+      />
+      <Snackbar visible={undoMsg !== null} message={undoMsg ?? ''} actionLabel="Undo" onAction={undoDelete} />
     </Screen>
   );
 }
@@ -196,14 +334,18 @@ function EntryBlock({
   index,
   entry,
   units,
+  editable,
   onAddSet,
+  onEditSet,
   onRemoveSet,
   onRemoveEntry,
 }: {
   index: number;
   entry: ExerciseEntryWithSets;
   units: Units;
+  editable: boolean;
   onAddSet: () => void;
+  onEditSet: (set: ExerciseEntryWithSets['sets'][number]) => void;
   onRemoveSet: (setId: string) => void;
   onRemoveEntry: () => void;
 }) {
@@ -234,24 +376,29 @@ function EntryBlock({
         <Text variant="subheading" style={{ flex: 1 }} numberOfLines={1}>
           {entry.exercise.name}
         </Text>
-        <Pressable onPress={onRemoveEntry} hitSlop={8}>
-          <Icon name="trash-outline" size={18} color={c.textTertiary} />
-        </Pressable>
+        {editable ? (
+          <Pressable onPress={onRemoveEntry} hitSlop={8}>
+            <Icon name="trash-outline" size={18} color={c.textTertiary} />
+          </Pressable>
+        ) : null}
       </View>
 
       {entry.sets.length > 0 ? (
         <View style={{ marginTop: Spacing.three, gap: 2 }}>
           {entry.sets.map((s, idx) => (
-            <View
+            <Pressable
               key={s.id}
-              style={{
+              onPress={editable ? () => onEditSet(s) : undefined}
+              disabled={!editable}
+              style={({ pressed }) => ({
                 flexDirection: 'row',
                 alignItems: 'center',
                 gap: Spacing.three,
                 paddingVertical: Spacing.two,
                 borderTopWidth: idx === 0 ? 0 : 1,
                 borderTopColor: c.border,
-              }}>
+                opacity: pressed ? 0.6 : 1,
+              })}>
               <View style={[styles.setNum, { backgroundColor: c.backgroundInteractive }]}>
                 <Text variant="caption" weight="bold">
                   {idx + 1}
@@ -272,10 +419,15 @@ function EntryBlock({
                   </Text>
                 ) : null}
               </View>
-              <Pressable onPress={() => onRemoveSet(s.id)} hitSlop={8}>
-                <Icon name="close" size={16} color={c.textTertiary} />
-              </Pressable>
-            </View>
+              {editable ? (
+                <>
+                  <Icon name="pencil" size={14} color={c.textTertiary} />
+                  <Pressable onPress={() => onRemoveSet(s.id)} hitSlop={8}>
+                    <Icon name="close" size={16} color={c.textTertiary} />
+                  </Pressable>
+                </>
+              ) : null}
+            </Pressable>
           ))}
         </View>
       ) : (
@@ -302,9 +454,11 @@ function EntryBlock({
         </View>
       ) : null}
 
-      <View style={{ marginTop: Spacing.three }}>
-        <Button title="Add set" variant="ghost" size="sm" fullWidth={false} icon={<Icon name="add" size={16} color={c.accent} />} onPress={onAddSet} />
-      </View>
+      {editable ? (
+        <View style={{ marginTop: Spacing.three }}>
+          <Button title="Add set" variant="ghost" size="sm" fullWidth={false} icon={<Icon name="add" size={16} color={c.accent} />} onPress={onAddSet} />
+        </View>
+      ) : null}
     </Card>
   );
 }
@@ -313,4 +467,14 @@ const styles = StyleSheet.create({
   iconBtn: { width: 36, height: 36, borderRadius: Radius.sm, alignItems: 'center', justifyContent: 'center' },
   indexChip: { width: 28, height: 28, borderRadius: Radius.sm, alignItems: 'center', justifyContent: 'center' },
   setNum: { width: 26, height: 26, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  lockBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    marginTop: Spacing.four,
+    paddingVertical: Spacing.three,
+    paddingHorizontal: Spacing.three,
+    borderRadius: Radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
 });

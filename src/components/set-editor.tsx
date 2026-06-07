@@ -15,6 +15,7 @@ type Props = {
   onClose: () => void;
   onSave: (drops: DropInput[]) => void;
   initialDrops?: DropInput[];
+  title?: string;
 };
 
 type Row = { weight: string; reps: string; isBodyweight: boolean };
@@ -31,7 +32,7 @@ function emptyRow(kind: ExerciseKind): Row {
   return { weight: '', reps: '', isBodyweight: kind === 'bodyweight' };
 }
 
-export function SetEditor({ visible, units, kind = 'weighted', onClose, onSave, initialDrops }: Props) {
+export function SetEditor({ visible, units, kind = 'weighted', onClose, onSave, initialDrops, title = 'Log set' }: Props) {
   const { c } = useTheme();
   const bodyweight = kind === 'bodyweight';
   const [rows, setRows] = useState<Row[]>([emptyRow(kind)]);
@@ -74,7 +75,7 @@ export function SetEditor({ visible, units, kind = 'weighted', onClose, onSave, 
       <SafeAreaView edges={['top', 'bottom']} style={{ flex: 1, backgroundColor: c.background }}>
       <View style={{ flex: 1, paddingHorizontal: Spacing.four, paddingBottom: Spacing.four }}>
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: Spacing.two }}>
-          <Text variant="heading">Log set</Text>
+          <Text variant="heading">{title}</Text>
           <Pressable onPress={close} hitSlop={8}>
             <Text variant="bodySmall" tone="secondary" weight="semibold">
               Cancel

@@ -5,10 +5,15 @@ export type Units = 'kg' | 'lb';
 
 export type ExerciseKind = 'weighted' | 'bodyweight';
 
+export type Gender = 'male' | 'female' | 'other' | 'prefer_not_to_say';
+
 export type Profile = {
   id: string;
   display_name: string | null;
   units: Units;
+  age: number | null;
+  gender: Gender | null;
+  height_cm: number | null;
   created_at: string;
   updated_at: string;
 };

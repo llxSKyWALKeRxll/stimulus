@@ -13,19 +13,27 @@ import { Colors, type ThemeName } from '@/constants/theme';
 import { AuthProvider, useAuth } from '@/lib/auth-context';
 
 function AuthGate() {
-  const { session, loading } = useAuth();
+  const { session, loading, profileLoading, needsOnboarding } = useAuth();
   const router = useRouter();
   const segments = useSegments();
 
   useEffect(() => {
     if (loading) return;
     const inAuth = segments[0] === '(auth)';
-    if (!session && !inAuth) {
-      router.replace('/(auth)/welcome');
-    } else if (session && inAuth) {
+    const onOnboarding = segments[0] === 'onboarding';
+
+    if (!session) {
+      if (!inAuth) router.replace('/(auth)/welcome');
+      return;
+    }
+    // Signed in — wait until we know whether they've onboarded.
+    if (profileLoading) return;
+    if (needsOnboarding) {
+      if (!onOnboarding) router.replace('/onboarding');
+    } else if (inAuth || onOnboarding) {
       router.replace('/(tabs)');
     }
-  }, [session, loading, segments, router]);
+  }, [session, loading, profileLoading, needsOnboarding, segments, router]);
 
   if (loading) {
     return (
@@ -38,6 +46,7 @@ function AuthGate() {
   return (
     <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: 'transparent' } }}>
       <Stack.Screen name="(auth)" />
+      <Stack.Screen name="onboarding" />
       <Stack.Screen name="(tabs)" />
       <Stack.Screen name="exercise/new" options={{ presentation: 'modal' }} />
       <Stack.Screen name="exercise/[id]" />
@@ -45,6 +54,7 @@ function AuthGate() {
       <Stack.Screen name="workout/[id]" />
       <Stack.Screen name="search" />
       <Stack.Screen name="body-weight" />
+      <Stack.Screen name="edit-profile" options={{ presentation: 'modal' }} />
       <Stack.Screen name="tags" options={{ presentation: 'modal' }} />
     </Stack>
   );

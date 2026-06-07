@@ -1,37 +1,43 @@
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { Alert, View } from 'react-native';
-import { Button, Card, Icon, Screen, SectionLabel, Segmented, Text } from '@/components/ui';
+import { Alert, Pressable, StyleSheet, View } from 'react-native';
+import { Button, Card, Icon, Logo, Screen, SectionLabel, Segmented, Text } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/theme';
 import { useAuth } from '@/lib/auth-context';
-import { getProfile, updateProfile } from '@/lib/db/queries';
-import type { Profile, Units } from '@/lib/db/types';
+import { listBodyWeights, updateProfile } from '@/lib/db/queries';
+import type { Gender, Units } from '@/lib/db/types';
 import { useTheme } from '@/lib/theme';
+import { formatWeight } from '@/lib/units';
+
+const GENDER_LABEL: Record<Gender, string> = {
+  male: 'Male',
+  female: 'Female',
+  other: 'Other',
+  prefer_not_to_say: 'Prefer not to say',
+};
 
 export default function ProfileScreen() {
   const { c } = useTheme();
-  const { session, signOut } = useAuth();
-  const [profile, setProfile] = useState<Profile | null>(null);
+  const router = useRouter();
+  const { session, profile, refreshProfile, signOut } = useAuth();
+  const [latestWeight, setLatestWeight] = useState<number | null>(null);
 
   useFocusEffect(
     useCallback(() => {
-      let mounted = true;
-      getProfile()
-        .then((p) => mounted && setProfile(p))
+      void refreshProfile();
+      listBodyWeights()
+        .then((bw) => setLatestWeight(bw.length ? bw[bw.length - 1].weight_kg : null))
         .catch(console.warn);
-      return () => {
-        mounted = false;
-      };
-    }, []),
+    }, [refreshProfile]),
   );
 
-  const setUnits = async (units: Units) => {
-    if (!profile || profile.units === units) return;
-    const optimistic = { ...profile, units };
-    setProfile(optimistic);
+  const units = profile?.units ?? 'kg';
+
+  const setUnits = async (next: Units) => {
+    if (!profile || profile.units === next) return;
     try {
-      const updated = await updateProfile({ units });
-      setProfile(updated);
+      await updateProfile({ units: next });
+      await refreshProfile();
     } catch (e) {
       console.warn(e);
     }
@@ -44,33 +50,82 @@ export default function ProfileScreen() {
     ]);
 
   const account = session?.user?.email ?? session?.user?.phone ?? '—';
+  const name = profile?.display_name?.trim() || 'Lifter';
+
+  const details: { label: string; value: string }[] = [
+    { label: 'Age', value: profile?.age != null ? `${profile.age}` : '—' },
+    { label: 'Gender', value: profile?.gender ? GENDER_LABEL[profile.gender] : '—' },
+    { label: 'Height', value: profile?.height_cm != null ? `${profile.height_cm} cm` : '—' },
+  ];
 
   return (
     <Screen scrollable>
-      <View style={{ marginTop: Spacing.five }}>
+      <View style={{ marginTop: Spacing.five, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
         <Text variant="title">Profile</Text>
+        <Pressable
+          onPress={() => router.push('/edit-profile')}
+          hitSlop={8}
+          style={[styles.editBtn, { backgroundColor: c.backgroundInteractive }]}>
+          <Icon name="create-outline" size={16} color={c.text} />
+          <Text variant="caption" weight="semibold">
+            Edit
+          </Text>
+        </Pressable>
       </View>
 
       <Card style={{ marginTop: Spacing.five }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: Spacing.four }}>
-          <View style={[styles_avatar, { backgroundColor: c.accentSoft }]}>
-            <Icon name="person" size={26} color={c.accent} />
+          <View style={[styles.avatar, { backgroundColor: c.accentSoft }]}>
+            <Logo size={48} />
           </View>
           <View style={{ flex: 1 }}>
-            <Text variant="label" tone="tertiary">
-              SIGNED IN AS
+            <Text variant="heading" numberOfLines={1}>
+              {name}
             </Text>
-            <Text variant="body" weight="semibold" style={{ marginTop: 2 }} numberOfLines={1}>
+            <Text variant="bodySmall" tone="tertiary" style={{ marginTop: 2 }} numberOfLines={1}>
               {account}
             </Text>
           </View>
         </View>
+
+        <View style={[styles.detailRow, { borderTopColor: c.border }]}>
+          {details.map((d, i) => (
+            <View key={d.label} style={[styles.detailCell, i < details.length - 1 && { borderRightWidth: 1, borderRightColor: c.border }]}>
+              <Text variant="caption" tone="tertiary">
+                {d.label.toUpperCase()}
+              </Text>
+              <Text variant="body" weight="semibold" style={{ marginTop: 2 }}>
+                {d.value}
+              </Text>
+            </View>
+          ))}
+        </View>
       </Card>
+
+      <View style={{ marginTop: Spacing.six }}>
+        <SectionLabel>Body weight</SectionLabel>
+        <Pressable onPress={() => router.push('/body-weight')}>
+          <Card>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: Spacing.three }}>
+              <Icon name="scale-outline" size={20} color={c.accent} />
+              <View style={{ flex: 1 }}>
+                <Text variant="body" weight="semibold">
+                  {latestWeight != null ? formatWeight(latestWeight, units, { withUnit: true }) : 'Not logged yet'}
+                </Text>
+                <Text variant="caption" tone="tertiary">
+                  Track and chart your body weight
+                </Text>
+              </View>
+              <Icon name="chevron-forward" size={18} color={c.textTertiary} />
+            </View>
+          </Card>
+        </Pressable>
+      </View>
 
       <View style={{ marginTop: Spacing.six }}>
         <SectionLabel>Units</SectionLabel>
         <Segmented<Units>
-          value={profile?.units ?? 'kg'}
+          value={units}
           onChange={setUnits}
           options={[
             { label: 'Kilograms (kg)', value: 'kg' },
@@ -95,10 +150,27 @@ export default function ProfileScreen() {
   );
 }
 
-const styles_avatar = {
-  width: 52,
-  height: 52,
-  borderRadius: Radius.full,
-  alignItems: 'center' as const,
-  justifyContent: 'center' as const,
-};
+const styles = StyleSheet.create({
+  editBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.one,
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.two,
+    borderRadius: Radius.full,
+  },
+  avatar: {
+    width: 64,
+    height: 64,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  detailRow: {
+    flexDirection: 'row',
+    marginTop: Spacing.four,
+    paddingTop: Spacing.four,
+    borderTopWidth: 1,
+  },
+  detailCell: { flex: 1, alignItems: 'center' },
+});

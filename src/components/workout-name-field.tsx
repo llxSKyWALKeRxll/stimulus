@@ -9,9 +9,10 @@ type Props = {
   sessionId: string;
   initialTitle: string | null;
   dateLabel: string;
+  editable?: boolean;
 };
 
-export function WorkoutNameField({ sessionId, initialTitle, dateLabel }: Props) {
+export function WorkoutNameField({ sessionId, initialTitle, dateLabel, editable = true }: Props) {
   const { c } = useTheme();
   const inputRef = useRef<TextInput>(null);
   const lastSaved = useRef((initialTitle ?? '').trim());
@@ -44,6 +45,29 @@ export function WorkoutNameField({ sessionId, initialTitle, dateLabel }: Props) 
     setValue(s);
     inputRef.current?.blur();
   };
+
+  if (!editable) {
+    return (
+      <View>
+        <Text variant="label" tone="tertiary">
+          WORKOUT
+        </Text>
+        <Text
+          style={{
+            color: c.text,
+            fontFamily: Fonts.serifBold,
+            fontSize: FontSize['3xl'],
+            paddingVertical: Spacing.one,
+            marginTop: 2,
+          }}>
+          {(initialTitle ?? '').trim() || 'Untitled workout'}
+        </Text>
+        <Text variant="caption" tone="tertiary">
+          {dateLabel}
+        </Text>
+      </View>
+    );
+  }
 
   return (
     <View>

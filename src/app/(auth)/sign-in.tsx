@@ -1,18 +1,27 @@
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
-import { KeyboardAvoidingView, Platform, StyleSheet, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { Button, Input, Pill, Screen, Text } from '@/components/ui';
 import { Spacing } from '@/constants/theme';
+import { accountExists } from '@/lib/db/queries';
 import { supabase } from '@/lib/supabase';
 
 type Channel = 'email' | 'phone';
+type Mode = 'login' | 'register';
 
 export default function SignIn() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ mode?: Mode }>();
+  const mode: Mode = params.mode === 'register' ? 'register' : 'login';
   const [channel, setChannel] = useState<Channel>('email');
   const [value, setValue] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const switchMode = () => {
+    setError(null);
+    router.setParams({ mode: mode === 'login' ? 'register' : 'login' });
+  };
 
   const valid =
     channel === 'email'
@@ -24,25 +33,52 @@ export default function SignIn() {
     setLoading(true);
     setError(null);
     const cleaned = value.trim();
+    const phone = cleaned.replace(/[\s-]/g, '');
+    const shouldCreateUser = mode === 'register';
     try {
+      // Registering: tell the user up front if they already have an account,
+      // before we send a code. (Best-effort — if the check fails, fall through.)
+      if (mode === 'register') {
+        try {
+          const exists = await accountExists(
+            channel === 'email' ? { email: cleaned } : { phone },
+          );
+          if (exists) {
+            setError('An account already exists for this. Tap “Log in” below instead.');
+            setLoading(false);
+            return;
+          }
+        } catch (checkErr) {
+          console.warn('account_exists check failed; continuing', checkErr);
+        }
+      }
+
       if (channel === 'email') {
         const { error } = await supabase.auth.signInWithOtp({
           email: cleaned,
-          options: { shouldCreateUser: true },
+          options: { shouldCreateUser },
         });
         if (error) throw error;
       } else {
         const { error } = await supabase.auth.signInWithOtp({
-          phone: cleaned.replace(/[\s-]/g, ''),
+          phone,
+          options: { shouldCreateUser },
         });
         if (error) throw error;
       }
       router.push({
         pathname: '/(auth)/verify-otp',
-        params: { channel, value: cleaned },
+        params: { channel, value: cleaned, mode },
       });
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not send the code. Try again.');
+      const raw = e instanceof Error ? e.message : '';
+      // Logging in with no existing account: Supabase rejects because we
+      // didn't allow user creation. Nudge them to register instead.
+      if (mode === 'login' && /signups? not allowed|not found|no.*user/i.test(raw)) {
+        setError("We couldn't find an account for that. Tap “Create an account” below.");
+      } else {
+        setError(raw || 'Could not send the code. Try again.');
+      }
     } finally {
       setLoading(false);
     }
@@ -55,9 +91,11 @@ export default function SignIn() {
         style={{ flex: 1 }}>
         <View style={styles.container}>
           <View style={{ gap: Spacing.three, marginTop: Spacing.four }}>
-            <Text variant="title">Sign in</Text>
+            <Text variant="title">{mode === 'register' ? 'Create your account' : 'Welcome back'}</Text>
             <Text variant="body" tone="secondary">
-              Enter your email or phone — we&apos;ll text or email a 6-digit code.
+              {mode === 'register'
+                ? "Enter your email or phone — we'll send a 6-digit code to verify it."
+                : "Enter your email or phone — we'll send a 6-digit code to sign you in."}
             </Text>
           </View>
 
@@ -115,7 +153,7 @@ export default function SignIn() {
 
           <View style={{ flex: 1 }} />
 
-          <View style={{ paddingBottom: Spacing.six }}>
+          <View style={{ paddingBottom: Spacing.six, gap: Spacing.four }}>
             <Button
               title="Send code"
               size="lg"
@@ -123,6 +161,14 @@ export default function SignIn() {
               disabled={!valid}
               onPress={onContinue}
             />
+            <Pressable onPress={switchMode} style={styles.switch} hitSlop={8}>
+              <Text variant="bodySmall" tone="secondary">
+                {mode === 'login' ? 'New to Stimulus? ' : 'Already have an account? '}
+                <Text variant="bodySmall" tone="accent" weight="semibold">
+                  {mode === 'login' ? 'Create an account' : 'Log in'}
+                </Text>
+              </Text>
+            </Pressable>
           </View>
         </View>
       </KeyboardAvoidingView>
@@ -133,4 +179,5 @@ export default function SignIn() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   tabs: { flexDirection: 'row', gap: Spacing.two },
+  switch: { alignItems: 'center' },
 });

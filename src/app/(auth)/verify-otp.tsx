@@ -1,32 +1,24 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
-import {
-  KeyboardAvoidingView,
-  Platform,
-  Pressable,
-  StyleSheet,
-  TextInput,
-  View,
-} from 'react-native';
-import { Button, Input, Screen, Text } from '@/components/ui';
+import { useEffect, useState } from 'react';
+import { KeyboardAvoidingView, Platform, Pressable, StyleSheet, View } from 'react-native';
+import { Button, OtpInput, Screen, Text } from '@/components/ui';
 import { Spacing } from '@/constants/theme';
 import { supabase } from '@/lib/supabase';
-import { useTheme } from '@/lib/theme';
 
 const RESEND_SECONDS = 30;
 
 export default function VerifyOtp() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ channel: 'email' | 'phone'; value: string }>();
+  const params = useLocalSearchParams<{ channel: 'email' | 'phone'; value: string; mode?: 'login' | 'register' }>();
   const channel = params.channel ?? 'email';
   const target = params.value ?? '';
+  const shouldCreateUser = params.mode === 'register';
 
   const [code, setCode] = useState('');
   const [verifying, setVerifying] = useState(false);
   const [resending, setResending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [cooldown, setCooldown] = useState(RESEND_SECONDS);
-  const inputRef = useRef<TextInput>(null);
 
   useEffect(() => {
     if (cooldown <= 0) return;
@@ -45,7 +37,7 @@ export default function VerifyOtp() {
           : { phone: target.replace(/[\s-]/g, ''), token, type: 'sms' as const };
       const { error } = await supabase.auth.verifyOtp(args);
       if (error) throw error;
-      // AuthGate handles redirect.
+      // AuthGate handles redirect (to onboarding or the app).
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Invalid code. Try again.');
       setCode('');
@@ -60,11 +52,15 @@ export default function VerifyOtp() {
     setError(null);
     try {
       if (channel === 'email') {
-        const { error } = await supabase.auth.signInWithOtp({ email: target });
+        const { error } = await supabase.auth.signInWithOtp({
+          email: target,
+          options: { shouldCreateUser },
+        });
         if (error) throw error;
       } else {
         const { error } = await supabase.auth.signInWithOtp({
           phone: target.replace(/[\s-]/g, ''),
+          options: { shouldCreateUser },
         });
         if (error) throw error;
       }
@@ -93,28 +89,23 @@ export default function VerifyOtp() {
             </Text>
           </View>
 
-          <Pressable onPress={() => inputRef.current?.focus()} style={{ marginTop: Spacing.six }}>
-            <CodeBoxes value={code} />
-            <Input
-              ref={inputRef}
+          <View style={{ marginTop: Spacing.six }}>
+            <OtpInput
               value={code}
-              onChangeText={(v) => {
-                const digits = v.replace(/\D/g, '').slice(0, 6);
-                setCode(digits);
-                if (digits.length === 6) void onVerify(digits);
+              onChange={(v) => {
+                setCode(v);
+                if (error) setError(null);
               }}
-              keyboardType="number-pad"
-              textContentType="oneTimeCode"
+              onComplete={(v) => void onVerify(v)}
+              error={!!error}
               autoFocus
-              maxLength={6}
-              style={{ position: 'absolute', opacity: 0, height: 0, width: 0 }}
             />
             {error ? (
               <Text variant="caption" tone="danger" style={{ marginTop: Spacing.three }}>
                 {error}
               </Text>
             ) : null}
-          </Pressable>
+          </View>
 
           <View style={{ alignItems: 'center', marginTop: Spacing.five }}>
             {cooldown > 0 ? (
@@ -148,45 +139,6 @@ export default function VerifyOtp() {
   );
 }
 
-function CodeBoxes({ value }: { value: string }) {
-  return (
-    <View style={styles.boxes}>
-      {Array.from({ length: 6 }).map((_, i) => {
-        const ch = value[i] ?? '';
-        const filled = !!ch;
-        return <CodeBox key={i} char={ch} filled={filled} />;
-      })}
-    </View>
-  );
-}
-
-function CodeBox({ char, filled }: { char: string; filled: boolean }) {
-  const { c } = useTheme();
-  return (
-    <View
-      style={[
-        styles.codeBox,
-        {
-          backgroundColor: c.backgroundElevated,
-          borderColor: filled ? c.accent : c.border,
-        },
-      ]}>
-      <Text variant="heading" weight="bold">
-        {char}
-      </Text>
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  boxes: { flexDirection: 'row', justifyContent: 'space-between', gap: Spacing.two },
-  codeBox: {
-    width: 48,
-    height: 60,
-    borderRadius: 12,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
 });

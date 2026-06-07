@@ -1,7 +1,7 @@
 import { useRouter } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
-import { Button, Screen, Text } from '@/components/ui';
-import { Spacing } from '@/constants/theme';
+import { Button, Logo, Screen, Text } from '@/components/ui';
+import { Radius, Spacing } from '@/constants/theme';
 import { useTheme } from '@/lib/theme';
 
 export default function Welcome() {
@@ -11,10 +11,8 @@ export default function Welcome() {
     <Screen>
       <View style={styles.container}>
         <View style={styles.hero}>
-          <View style={[styles.markBox, { backgroundColor: c.accent }]}>
-            <Text style={{ color: c.accentForeground, fontSize: 36, fontWeight: '800' }}>
-              S
-            </Text>
+          <View style={[styles.markBox, { backgroundColor: c.backgroundElevated, borderColor: c.border }]}>
+            <Logo size={72} />
           </View>
           <Text variant="display" style={{ marginTop: Spacing.five }}>
             Stimulus
@@ -26,9 +24,15 @@ export default function Welcome() {
 
         <View style={{ gap: Spacing.three, paddingBottom: Spacing.six }}>
           <Button
-            title="Continue"
+            title="Log in"
             size="lg"
-            onPress={() => router.push('/(auth)/sign-in')}
+            onPress={() => router.push({ pathname: '/(auth)/sign-in', params: { mode: 'login' } })}
+          />
+          <Button
+            title="Create an account"
+            variant="ghost"
+            size="lg"
+            onPress={() => router.push({ pathname: '/(auth)/sign-in', params: { mode: 'register' } })}
           />
           <Text variant="caption" tone="tertiary" align="center">
             We&apos;ll send a one-time code. No passwords.
@@ -52,9 +56,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.four,
   },
   markBox: {
-    width: 96,
-    height: 96,
-    borderRadius: 24,
+    width: 124,
+    height: 124,
+    borderRadius: Radius.xl,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },

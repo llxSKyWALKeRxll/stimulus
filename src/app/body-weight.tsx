@@ -1,7 +1,9 @@
+import { format } from 'date-fns';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
 import { Dimensions, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { LineChart } from 'react-native-gifted-charts';
+import { DatePicker, toDayKey } from '@/components/date-picker';
 import { Button, Card, EmptyState, Icon, Input, Screen, SectionLabel, Segmented, StatTile, Text } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/theme';
 import { getProfile, listBodyWeights, logBodyWeight } from '@/lib/db/queries';
@@ -24,6 +26,9 @@ export default function BodyWeightScreen() {
   const [value, setValue] = useState('');
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
+  const todayKey = useMemo(() => toDayKey(new Date()), []);
+  const [date, setDate] = useState(todayKey);
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -60,6 +65,16 @@ export default function BodyWeightScreen() {
     [filtered, units, c.textTertiary],
   );
 
+  const marked = useMemo(() => new Set(entries.map((e) => e.recorded_on)), [entries]);
+  const existingForDate = useMemo(() => entries.find((e) => e.recorded_on === date), [entries, date]);
+  const dateLabel = date === todayKey ? 'Today' : format(new Date(`${date}T00:00:00`), 'EEE, MMM d, yyyy');
+
+  const pickDate = (key: string) => {
+    setDate(key);
+    const ex = entries.find((e) => e.recorded_on === key);
+    setValue(ex ? String(Math.round(kgToDisplay(ex.weight_kg, units) * 10) / 10) : '');
+  };
+
   const stats = useMemo(() => {
     if (filtered.length === 0) return null;
     const kgs = filtered.map((e) => e.weight_kg);
@@ -78,7 +93,7 @@ export default function BodyWeightScreen() {
     if (!v || Number.isNaN(v) || saving) return;
     setSaving(true);
     try {
-      await logBodyWeight(displayToKg(v, units));
+      await logBodyWeight(displayToKg(v, units), date);
       setValue('');
       await load();
     } catch (e) {
@@ -102,18 +117,38 @@ export default function BodyWeightScreen() {
 
       <ScrollView contentContainerStyle={{ paddingBottom: Spacing.eight }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
         <Card style={{ marginTop: Spacing.four }}>
+          <Pressable
+            onPress={() => setPickerOpen(true)}
+            style={{ flexDirection: 'row', alignItems: 'center', gap: Spacing.two, marginBottom: Spacing.three }}>
+            <Icon name="calendar-outline" size={18} color={c.accent} />
+            <Text variant="body" weight="semibold" style={{ flex: 1 }}>
+              {dateLabel}
+            </Text>
+            <Text variant="caption" tone="accent" weight="semibold">
+              Change
+            </Text>
+            <Icon name="chevron-forward" size={14} color={c.accent} />
+          </Pressable>
+
           <View style={{ flexDirection: 'row', gap: Spacing.two, alignItems: 'flex-start' }}>
             <View style={{ flex: 1 }}>
               <Input
-                placeholder={`Today's weight (${units})`}
+                placeholder={`Weight (${units})`}
                 keyboardType="decimal-pad"
                 value={value}
                 onChangeText={(t) => setValue(t.replace(/[^\d.]/g, ''))}
                 leading={<Icon name="scale-outline" size={18} color={c.textTertiary} />}
               />
             </View>
-            <Button title="Log" onPress={log} loading={saving} disabled={!value} fullWidth={false} />
+            <Button title={existingForDate ? 'Update' : 'Log'} onPress={log} loading={saving} disabled={!value} fullWidth={false} />
           </View>
+
+          {existingForDate ? (
+            <Text variant="caption" tone="tertiary" style={{ marginTop: Spacing.two }}>
+              {date === todayKey ? 'Already logged today' : 'Already logged this day'} (
+              {formatWeight(existingForDate.weight_kg, units, { withUnit: true })}) — saving overwrites it.
+            </Text>
+          ) : null}
         </Card>
 
         {loading ? (
@@ -215,6 +250,14 @@ export default function BodyWeightScreen() {
           </>
         )}
       </ScrollView>
+
+      <DatePicker
+        visible={pickerOpen}
+        value={date}
+        marked={marked}
+        onClose={() => setPickerOpen(false)}
+        onSelect={pickDate}
+      />
     </Screen>
   );
 }
